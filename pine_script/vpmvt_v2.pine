@@ -1,0 +1,311 @@
+//@version=5
+indicator("VPMVT V2", "VPMVT V2", overlay=false, precision=2)
+
+// ============================================================================
+// VPMVT V2 - Volume Price Momentum Volatility Time Indicator
+// Composite indicator combining 5 market dimensions for crypto trading
+// ============================================================================
+
+// INPUT PARAMETERS
+// ============================================================================
+
+// Period Settings
+volumePeriod = input.int(20, "Volume Period", minval=1, group="Periods")
+pricePeriod = input.int(20, "Price Period", minval=1, group="Periods")
+momentumPeriod = input.int(14, "Momentum Period", minval=1, group="Periods")
+volatilityPeriod = input.int(14, "Volatility Period", minval=1, group="Periods")
+timePeriod = input.int(20, "Time Period", minval=1, group="Periods")
+
+// Component Weights (0-100)
+volumeWeight = input.float(20, "Volume Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+priceWeight = input.float(20, "Price Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+momentumWeight = input.float(20, "Momentum Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+volatilityWeight = input.float(20, "Volatility Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+timeWeight = input.float(20, "Time Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+
+// Signal Settings
+buyThreshold = input.float(70, "Buy Threshold", minval=0, maxval=100, group="Signals")
+sellThreshold = input.float(30, "Sell Threshold", minval=0, maxval=100, group="Signals")
+showSignals = input.bool(true, "Show Buy/Sell Signals", group="Signals")
+showComponents = input.bool(false, "Show Individual Components", group="Display")
+
+// Normalize weights to sum to 1.0
+totalWeight = volumeWeight + priceWeight + momentumWeight + volatilityWeight + timeWeight
+normVolWeight = volumeWeight / totalWeight
+normPriceWeight = priceWeight / totalWeight
+normMomWeight = momentumWeight / totalWeight
+normVolatWeight = volatilityWeight / totalWeight
+normTimeWeight = timeWeight / totalWeight
+
+
+// ============================================================================
+// VOLUME COMPONENT (0-100)
+// ============================================================================
+
+f_volumeComponent() =>
+    // Typical Price
+    typicalPrice = hlc3
+
+    // Money Flow
+    rawMoneyFlow = typicalPrice * volume
+    positiveFlow = typicalPrice > typicalPrice[1] ? rawMoneyFlow : 0
+    negativeFlow = typicalPrice < typicalPrice[1] ? rawMoneyFlow : 0
+
+    // Money Flow Index (MFI)
+    positiveMF = ta.sma(positiveFlow, volumePeriod)
+    negativeMF = ta.sma(negativeFlow, volumePeriod)
+    mfi = 100 - (100 / (1 + (positiveMF / (negativeMF + 1e-10))))
+
+    // Volume Rate of Change
+    vroc = ((volume / volume[volumePeriod]) - 1) * 100
+    vrocStd = ta.stdev(vroc, 100)
+    vrocNorm = 50 + math.min(math.max(vroc / vrocStd, -2), 2) * 25
+
+    // On-Balance Volume
+    obvChange = ta.change(close) > 0 ? volume : ta.change(close) < 0 ? -volume : 0
+    obv = ta.cum(obvChange)
+    obvRoc = ta.roc(obv, volumePeriod)
+    obvStd = ta.stdev(obvRoc, 100)
+    obvNorm = 50 + math.min(math.max(obvRoc / obvStd, -2), 2) * 25
+
+    // Combine components
+    volumeScore = mfi * 0.4 + vrocNorm * 0.3 + obvNorm * 0.3
+    math.min(math.max(volumeScore, 0), 100)
+
+
+// ============================================================================
+// PRICE COMPONENT (0-100)
+// ============================================================================
+
+f_priceComponent() =>
+    // Moving Averages
+    sma = ta.sma(close, pricePeriod)
+    ema = ta.ema(close, pricePeriod)
+
+    // Price position vs SMA/EMA
+    priceVsSma = math.min(math.max(((close - sma) / sma * 100), -50), 50) + 50
+    priceVsEma = math.min(math.max(((close - ema) / ema * 100), -50), 50) + 50
+
+    // Price Rate of Change
+    roc = ta.roc(close, pricePeriod)
+    rocStd = ta.stdev(roc, 100)
+    rocNorm = 50 + math.min(math.max(roc / rocStd, -2), 2) * 25
+
+    // Trend Strength (ADX-like)
+    [diPlus, diMinus, adx] = ta.dmi(pricePeriod, pricePeriod)
+    trendStrength = math.abs(diPlus - diMinus) / (diPlus + diMinus + 1e-10) * 100
+    trendDirection = diPlus > diMinus ? 1 : -1
+    trendScore = 50 + (trendStrength * trendDirection * 0.5)
+
+    // Combine components
+    priceScore = priceVsSma * 0.3 + priceVsEma * 0.3 + rocNorm * 0.2 + trendScore * 0.2
+    math.min(math.max(priceScore, 0), 100)
+
+
+// ============================================================================
+// MOMENTUM COMPONENT (0-100)
+// ============================================================================
+
+f_momentumComponent() =>
+    // RSI
+    rsi = ta.rsi(close, momentumPeriod)
+
+    // Stochastic
+    stochK = ta.stoch(close, high, low, momentumPeriod)
+
+    // Momentum (Rate of Change)
+    momentum = ta.roc(close, momentumPeriod)
+    momStd = ta.stdev(momentum, 100)
+    momNorm = 50 + math.min(math.max(momentum / momStd, -2), 2) * 25
+
+    // Combine components
+    momentumScore = rsi * 0.4 + stochK * 0.3 + momNorm * 0.3
+    math.min(math.max(momentumScore, 0), 100)
+
+
+// ============================================================================
+// VOLATILITY COMPONENT (0-100)
+// ============================================================================
+
+f_volatilityComponent() =>
+    // Average True Range
+    atr = ta.atr(volatilityPeriod)
+    atrPct = (atr / close) * 100
+    atrQuantile = ta.percentrank(atrPct, 100)
+    atrNorm = 100 - atrQuantile
+
+    // Standard Deviation
+    returns = ta.roc(close, 1)
+    stdDev = ta.stdev(returns, volatilityPeriod) * math.sqrt(252) * 100
+    stdQuantile = ta.percentrank(stdDev, 100)
+    stdNorm = 100 - stdQuantile
+
+    // Bollinger Band Width
+    basis = ta.sma(close, volatilityPeriod)
+    dev = ta.stdev(close, volatilityPeriod)
+    upperBB = basis + (dev * 2)
+    lowerBB = basis - (dev * 2)
+    bbWidth = ((upperBB - lowerBB) / basis) * 100
+    bbQuantile = ta.percentrank(bbWidth, 100)
+    bbNorm = 100 - bbQuantile
+
+    // Combine components (inverse: high volatility = low score)
+    volatilityScore = atrNorm * 0.4 + stdNorm * 0.3 + bbNorm * 0.3
+    math.min(math.max(volatilityScore, 0), 100)
+
+
+// ============================================================================
+// TIME COMPONENT (0-100)
+// ============================================================================
+
+f_timeComponent() =>
+    // VWAP
+    typicalPrice = hlc3
+    vwap = ta.vwma(typicalPrice, timePeriod)
+    priceVsVwap = math.min(math.max(((close - vwap) / vwap * 100), -50), 50) + 50
+
+    // Time-weighted momentum using EMA of returns
+    returns = ta.roc(close, 1)
+    timeWeightedMom = ta.ema(returns, timePeriod) * 100
+    momStd = ta.stdev(returns, 100) * 100
+    timeMomNorm = 50 + math.min(math.max(timeWeightedMom / momStd, -2), 2) * 25
+
+    // EMA distance
+    emaShort = ta.ema(close, int(timePeriod / 2))
+    emaLong = ta.ema(close, timePeriod)
+    emaDistance = math.min(math.max(((emaShort - emaLong) / emaLong * 100), -50), 50) + 50
+
+    // Combine components
+    timeScore = priceVsVwap * 0.4 + timeMomNorm * 0.3 + emaDistance * 0.3
+    math.min(math.max(timeScore, 0), 100)
+
+
+// ============================================================================
+// CALCULATE COMPONENTS
+// ============================================================================
+
+volumeScore = f_volumeComponent()
+priceScore = f_priceComponent()
+momentumScore = f_momentumComponent()
+volatilityScore = f_volatilityComponent()
+timeScore = f_timeComponent()
+
+// Calculate composite VPMVT V2 score
+vpmvt = (volumeScore * normVolWeight +
+         priceScore * normPriceWeight +
+         momentumScore * normMomWeight +
+         volatilityScore * normVolatWeight +
+         timeScore * normTimeWeight)
+
+
+// ============================================================================
+// SIGNAL GENERATION
+// ============================================================================
+
+// Buy/Sell Signals
+buySignal = ta.crossover(vpmvt, buyThreshold)
+sellSignal = ta.crossunder(vpmvt, sellThreshold)
+
+// Signal Strength
+signalStrength = vpmvt >= 80 ? "Very Strong" :
+                 vpmvt >= 60 ? "Strong" :
+                 vpmvt >= 40 ? "Moderate" :
+                 vpmvt >= 20 ? "Weak" : "Very Weak"
+
+
+// ============================================================================
+// PLOTTING
+// ============================================================================
+
+// Main VPMVT V2 Line
+plot(vpmvt, "VPMVT V2", color=color.new(color.blue, 0), linewidth=2)
+
+// Threshold Lines
+hline(buyThreshold, "Buy Threshold", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+hline(sellThreshold, "Sell Threshold", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+hline(50, "Neutral", color=color.new(color.gray, 70), linestyle=hline.style_dotted)
+
+// Signal Strength Zones
+bgcolor(vpmvt >= 80 ? color.new(color.green, 90) :
+        vpmvt >= 60 ? color.new(color.green, 95) :
+        vpmvt <= 20 ? color.new(color.red, 90) :
+        vpmvt <= 40 ? color.new(color.red, 95) : na)
+
+// Buy/Sell Signals
+plotshape(showSignals and buySignal, "Buy Signal",
+          shape.triangleup, location.bottom,
+          color.new(color.green, 0), size=size.small)
+
+plotshape(showSignals and sellSignal, "Sell Signal",
+          shape.triangledown, location.top,
+          color.new(color.red, 0), size=size.small)
+
+// Individual Components (optional)
+plot(showComponents ? volumeScore : na, "Volume", color=color.new(color.orange, 0), linewidth=1)
+plot(showComponents ? priceScore : na, "Price", color=color.new(color.yellow, 0), linewidth=1)
+plot(showComponents ? momentumScore : na, "Momentum", color=color.new(color.purple, 0), linewidth=1)
+plot(showComponents ? volatilityScore : na, "Volatility", color=color.new(color.red, 0), linewidth=1)
+plot(showComponents ? timeScore : na, "Time", color=color.new(color.aqua, 0), linewidth=1)
+
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(buySignal, title="VPMVT V2 Buy Signal",
+              message="VPMVT V2 Buy Signal: {{ticker}} at {{close}}")
+
+alertcondition(sellSignal, title="VPMVT V2 Sell Signal",
+              message="VPMVT V2 Sell Signal: {{ticker}} at {{close}}")
+
+alertcondition(ta.cross(vpmvt, 50), title="VPMVT V2 Neutral Cross",
+              message="VPMVT V2 crossed 50 level: {{ticker}}")
+
+
+// ============================================================================
+// TABLE - Current Values
+// ============================================================================
+
+if barstate.islast
+    var table infoTable = table.new(position.top_right, 2, 8,
+                                    border_width=1,
+                                    border_color=color.gray,
+                                    frame_width=1,
+                                    frame_color=color.gray)
+
+    // Header
+    table.cell(infoTable, 0, 0, "VPMVT V2",
+              text_color=color.white, bgcolor=color.blue, text_size=size.normal)
+    table.cell(infoTable, 1, 0, str.tostring(math.round(vpmvt, 2)),
+              text_color=color.white, bgcolor=color.blue, text_size=size.normal)
+
+    // Signal Strength
+    strengthColor = vpmvt >= 70 ? color.green :
+                   vpmvt >= 50 ? color.yellow :
+                   vpmvt >= 30 ? color.orange : color.red
+    table.cell(infoTable, 0, 1, "Strength", text_size=size.small)
+    table.cell(infoTable, 1, 1, signalStrength,
+              text_color=color.white, bgcolor=strengthColor, text_size=size.small)
+
+    // Components
+    table.cell(infoTable, 0, 2, "Volume", text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(math.round(volumeScore, 1)), text_size=size.tiny)
+
+    table.cell(infoTable, 0, 3, "Price", text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(math.round(priceScore, 1)), text_size=size.tiny)
+
+    table.cell(infoTable, 0, 4, "Momentum", text_size=size.tiny)
+    table.cell(infoTable, 1, 4, str.tostring(math.round(momentumScore, 1)), text_size=size.tiny)
+
+    table.cell(infoTable, 0, 5, "Volatility", text_size=size.tiny)
+    table.cell(infoTable, 1, 5, str.tostring(math.round(volatilityScore, 1)), text_size=size.tiny)
+
+    table.cell(infoTable, 0, 6, "Time", text_size=size.tiny)
+    table.cell(infoTable, 1, 6, str.tostring(math.round(timeScore, 1)), text_size=size.tiny)
+
+    // Signal
+    signalText = buySignal ? "BUY ▲" : sellSignal ? "SELL ▼" : "NEUTRAL"
+    signalColor = buySignal ? color.green : sellSignal ? color.red : color.gray
+    table.cell(infoTable, 0, 7, "Signal", text_size=size.small)
+    table.cell(infoTable, 1, 7, signalText,
+              text_color=color.white, bgcolor=signalColor, text_size=size.small)

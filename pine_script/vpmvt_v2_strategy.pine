@@ -1,0 +1,210 @@
+//@version=5
+strategy("VPMVT V2 Strategy", "VPMVT V2 STR", overlay=false, precision=2,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=100,
+         initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.1)
+
+// ============================================================================
+// VPMVT V2 STRATEGY - Volume Price Momentum Volatility Time
+// Automated trading strategy for backtesting
+// ============================================================================
+
+// INPUT PARAMETERS
+// ============================================================================
+
+// Period Settings
+volumePeriod = input.int(20, "Volume Period", minval=1, group="Periods")
+pricePeriod = input.int(20, "Price Period", minval=1, group="Periods")
+momentumPeriod = input.int(14, "Momentum Period", minval=1, group="Periods")
+volatilityPeriod = input.int(14, "Volatility Period", minval=1, group="Periods")
+timePeriod = input.int(20, "Time Period", minval=1, group="Periods")
+
+// Component Weights
+volumeWeight = input.float(20, "Volume Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+priceWeight = input.float(20, "Price Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+momentumWeight = input.float(20, "Momentum Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+volatilityWeight = input.float(20, "Volatility Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+timeWeight = input.float(20, "Time Weight", minval=0, maxval=100, step=1, group="Weights") / 100
+
+// Trading Settings
+buyThreshold = input.float(70, "Buy Threshold", minval=0, maxval=100, group="Trading")
+sellThreshold = input.float(30, "Sell Threshold", minval=0, maxval=100, group="Trading")
+useStopLoss = input.bool(true, "Use Stop Loss", group="Risk Management")
+stopLossPercent = input.float(5.0, "Stop Loss %", minval=0.1, maxval=20, step=0.1, group="Risk Management")
+useTakeProfit = input.bool(true, "Use Take Profit", group="Risk Management")
+takeProfitPercent = input.float(10.0, "Take Profit %", minval=0.1, maxval=50, step=0.1, group="Risk Management")
+
+// Normalize weights
+totalWeight = volumeWeight + priceWeight + momentumWeight + volatilityWeight + timeWeight
+normVolWeight = volumeWeight / totalWeight
+normPriceWeight = priceWeight / totalWeight
+normMomWeight = momentumWeight / totalWeight
+normVolatWeight = volatilityWeight / totalWeight
+normTimeWeight = timeWeight / totalWeight
+
+
+// ============================================================================
+// COMPONENT FUNCTIONS
+// ============================================================================
+
+f_volumeComponent() =>
+    typicalPrice = hlc3
+    rawMoneyFlow = typicalPrice * volume
+    positiveFlow = typicalPrice > typicalPrice[1] ? rawMoneyFlow : 0
+    negativeFlow = typicalPrice < typicalPrice[1] ? rawMoneyFlow : 0
+
+    positiveMF = ta.sma(positiveFlow, volumePeriod)
+    negativeMF = ta.sma(negativeFlow, volumePeriod)
+    mfi = 100 - (100 / (1 + (positiveMF / (negativeMF + 1e-10))))
+
+    vroc = ((volume / volume[volumePeriod]) - 1) * 100
+    vrocStd = ta.stdev(vroc, 100)
+    vrocNorm = 50 + math.min(math.max(vroc / vrocStd, -2), 2) * 25
+
+    obvChange = ta.change(close) > 0 ? volume : ta.change(close) < 0 ? -volume : 0
+    obv = ta.cum(obvChange)
+    obvRoc = ta.roc(obv, volumePeriod)
+    obvStd = ta.stdev(obvRoc, 100)
+    obvNorm = 50 + math.min(math.max(obvRoc / obvStd, -2), 2) * 25
+
+    volumeScore = mfi * 0.4 + vrocNorm * 0.3 + obvNorm * 0.3
+    math.min(math.max(volumeScore, 0), 100)
+
+f_priceComponent() =>
+    sma = ta.sma(close, pricePeriod)
+    ema = ta.ema(close, pricePeriod)
+
+    priceVsSma = math.min(math.max(((close - sma) / sma * 100), -50), 50) + 50
+    priceVsEma = math.min(math.max(((close - ema) / ema * 100), -50), 50) + 50
+
+    roc = ta.roc(close, pricePeriod)
+    rocStd = ta.stdev(roc, 100)
+    rocNorm = 50 + math.min(math.max(roc / rocStd, -2), 2) * 25
+
+    [diPlus, diMinus, adx] = ta.dmi(pricePeriod, pricePeriod)
+    trendStrength = math.abs(diPlus - diMinus) / (diPlus + diMinus + 1e-10) * 100
+    trendDirection = diPlus > diMinus ? 1 : -1
+    trendScore = 50 + (trendStrength * trendDirection * 0.5)
+
+    priceScore = priceVsSma * 0.3 + priceVsEma * 0.3 + rocNorm * 0.2 + trendScore * 0.2
+    math.min(math.max(priceScore, 0), 100)
+
+f_momentumComponent() =>
+    rsi = ta.rsi(close, momentumPeriod)
+    stochK = ta.stoch(close, high, low, momentumPeriod)
+
+    momentum = ta.roc(close, momentumPeriod)
+    momStd = ta.stdev(momentum, 100)
+    momNorm = 50 + math.min(math.max(momentum / momStd, -2), 2) * 25
+
+    momentumScore = rsi * 0.4 + stochK * 0.3 + momNorm * 0.3
+    math.min(math.max(momentumScore, 0), 100)
+
+f_volatilityComponent() =>
+    atr = ta.atr(volatilityPeriod)
+    atrPct = (atr / close) * 100
+    atrQuantile = ta.percentrank(atrPct, 100)
+    atrNorm = 100 - atrQuantile
+
+    returns = ta.roc(close, 1)
+    stdDev = ta.stdev(returns, volatilityPeriod) * math.sqrt(252) * 100
+    stdQuantile = ta.percentrank(stdDev, 100)
+    stdNorm = 100 - stdQuantile
+
+    basis = ta.sma(close, volatilityPeriod)
+    dev = ta.stdev(close, volatilityPeriod)
+    upperBB = basis + (dev * 2)
+    lowerBB = basis - (dev * 2)
+    bbWidth = ((upperBB - lowerBB) / basis) * 100
+    bbQuantile = ta.percentrank(bbWidth, 100)
+    bbNorm = 100 - bbQuantile
+
+    volatilityScore = atrNorm * 0.4 + stdNorm * 0.3 + bbNorm * 0.3
+    math.min(math.max(volatilityScore, 0), 100)
+
+f_timeComponent() =>
+    typicalPrice = hlc3
+    vwap = ta.vwma(typicalPrice, timePeriod)
+    priceVsVwap = math.min(math.max(((close - vwap) / vwap * 100), -50), 50) + 50
+
+    returns = ta.roc(close, 1)
+    timeWeightedMom = ta.ema(returns, timePeriod) * 100
+    momStd = ta.stdev(returns, 100) * 100
+    timeMomNorm = 50 + math.min(math.max(timeWeightedMom / momStd, -2), 2) * 25
+
+    emaShort = ta.ema(close, int(timePeriod / 2))
+    emaLong = ta.ema(close, timePeriod)
+    emaDistance = math.min(math.max(((emaShort - emaLong) / emaLong * 100), -50), 50) + 50
+
+    timeScore = priceVsVwap * 0.4 + timeMomNorm * 0.3 + emaDistance * 0.3
+    math.min(math.max(timeScore, 0), 100)
+
+
+// ============================================================================
+// CALCULATE VPMVT V2
+// ============================================================================
+
+volumeScore = f_volumeComponent()
+priceScore = f_priceComponent()
+momentumScore = f_momentumComponent()
+volatilityScore = f_volatilityComponent()
+timeScore = f_timeComponent()
+
+vpmvt = (volumeScore * normVolWeight +
+         priceScore * normPriceWeight +
+         momentumScore * normMomWeight +
+         volatilityScore * normVolatWeight +
+         timeScore * normTimeWeight)
+
+
+// ============================================================================
+// TRADING LOGIC
+// ============================================================================
+
+// Entry Conditions
+longCondition = ta.crossover(vpmvt, buyThreshold)
+shortCondition = ta.crossunder(vpmvt, sellThreshold)
+
+// Exit Conditions
+exitLongCondition = ta.crossunder(vpmvt, sellThreshold)
+exitShortCondition = ta.crossover(vpmvt, buyThreshold)
+
+// Execute Trades
+if longCondition
+    strategy.close("Short", comment="Exit Short")
+    strategy.entry("Long", strategy.long, comment="Buy: " + str.tostring(math.round(vpmvt, 2)))
+
+if shortCondition
+    strategy.close("Long", comment="Exit Long")
+    // Uncomment if you want short positions
+    // strategy.entry("Short", strategy.short, comment="Sell: " + str.tostring(math.round(vpmvt, 2)))
+
+// Stop Loss and Take Profit
+if strategy.position_size > 0 and useStopLoss
+    stopPrice = strategy.position_avg_price * (1 - stopLossPercent / 100)
+    strategy.exit("SL Long", "Long", stop=stopPrice)
+
+if strategy.position_size > 0 and useTakeProfit
+    tpPrice = strategy.position_avg_price * (1 + takeProfitPercent / 100)
+    strategy.exit("TP Long", "Long", limit=tpPrice)
+
+
+// ============================================================================
+// PLOTTING
+// ============================================================================
+
+plot(vpmvt, "VPMVT V2", color=color.new(color.blue, 0), linewidth=2)
+
+hline(buyThreshold, "Buy", color=color.new(color.green, 50), linestyle=hline.style_dashed)
+hline(sellThreshold, "Sell", color=color.new(color.red, 50), linestyle=hline.style_dashed)
+hline(50, "Neutral", color=color.new(color.gray, 70), linestyle=hline.style_dotted)
+
+bgcolor(vpmvt >= 80 ? color.new(color.green, 90) :
+        vpmvt >= 60 ? color.new(color.green, 95) :
+        vpmvt <= 20 ? color.new(color.red, 90) :
+        vpmvt <= 40 ? color.new(color.red, 95) : na)
+
+// Mark entry points
+plotshape(longCondition, "Buy", shape.triangleup, location.bottom,
+          color.new(color.green, 0), size=size.small)
+plotshape(shortCondition, "Sell", shape.triangledown, location.top,
+          color.new(color.red, 0), size=size.small)
