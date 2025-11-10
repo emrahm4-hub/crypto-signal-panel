@@ -7,11 +7,18 @@ Advanced cryptocurrency trading signal panel featuring the VPMVT V2 (Volume-Pric
 ## Features
 
 - **VPMVT V2 Indicator**: Advanced composite indicator combining 5 market dimensions
+- **Pine Script Support**: Ready-to-use TradingView indicators (see [pine_script/](pine_script/))
 - **Real-time Analysis**: Order flow and volume analysis
 - **Customizable Parameters**: Adjust weights and periods for each component
 - **Signal Generation**: Automated buy/sell signal detection
 - **Multi-timeframe Support**: Works with any timeframe data
 - **Extensible Framework**: Easy to add new indicators
+
+## 🎯 Quick Access
+
+- **Python Implementation**: Use `backend/indicators/vpmvt_v2.py` for custom applications
+- **TradingView (Pine Script)**: See [pine_script/README.md](pine_script/README.md) for TradingView integration
+- **Examples**: Check `examples/vpmvt_v2_example.py` for Python usage examples
 
 ## VPMVT V2 Indicator
 
@@ -171,8 +178,12 @@ crypto-signal-panel/
 │   ├── signals/             # Signal generation logic
 │   ├── api/                 # REST API endpoints
 │   └── utils/               # Utility functions
+├── pine_script/             # TradingView Pine Script versions
+│   ├── vpmvt_v2.pine        # Indicator version
+│   ├── vpmvt_v2_strategy.pine  # Strategy version with backtest
+│   └── README.md            # Pine Script documentation (Turkish)
 ├── examples/
-│   └── vpmvt_v2_example.py  # Usage examples
+│   └── vpmvt_v2_example.py  # Python usage examples
 ├── tests/                   # Unit tests
 ├── docs/                    # Documentation
 ├── config/                  # Configuration files
