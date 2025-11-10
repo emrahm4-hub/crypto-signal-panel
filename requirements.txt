@@ -1,0 +1,53 @@
+# Core dependencies for Crypto Signal Panel
+# Python 3.8+
+
+# Data processing and numerical computation
+pandas>=1.3.0
+numpy>=1.21.0
+
+# Technical analysis libraries
+pandas-ta>=0.3.14b          # Technical analysis indicators
+ta>=0.10.2                  # Alternative TA library
+
+# Exchange connectivity and data
+ccxt>=4.0.0                 # Unified cryptocurrency exchange API
+websocket-client>=1.3.0     # Real-time data streaming
+
+# Web framework and API
+fastapi>=0.95.0             # Modern web framework
+uvicorn>=0.21.0             # ASGI server
+pydantic>=2.0.0             # Data validation
+
+# Data visualization
+plotly>=5.0.0               # Interactive charts
+matplotlib>=3.5.0           # Static plots
+mplfinance>=0.12.0          # Financial charts
+
+# Database and caching
+redis>=4.5.0                # In-memory data store
+sqlalchemy>=2.0.0           # SQL toolkit and ORM
+aiosqlite>=0.19.0           # Async SQLite
+
+# Configuration and utilities
+python-dotenv>=1.0.0        # Environment configuration
+pyyaml>=6.0                 # YAML parsing
+python-dateutil>=2.8.0      # Date utilities
+
+# Testing
+pytest>=7.0.0               # Testing framework
+pytest-asyncio>=0.21.0      # Async testing
+pytest-cov>=4.0.0           # Code coverage
+
+# Code quality
+black>=23.0.0               # Code formatter
+flake8>=6.0.0               # Linting
+mypy>=1.0.0                 # Type checking
+
+# Documentation
+sphinx>=6.0.0               # Documentation generator
+sphinx-rtd-theme>=1.2.0     # ReadTheDocs theme
+
+# Optional: For advanced features
+scikit-learn>=1.2.0         # Machine learning
+scipy>=1.10.0               # Scientific computing
+numba>=0.56.0               # JIT compilation for performance
