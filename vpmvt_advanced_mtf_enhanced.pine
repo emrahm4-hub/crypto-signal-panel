@@ -818,8 +818,7 @@ plotshape(show_mtf_confluence and is_bearish_confluence,
           style=shape.circle, location=location.top, color=#FF1744, size=size.large,
           title="MTF Bearish Confluence", text="CF🔴")
 
-conf_bg_color = show_mtf_confluence and is_bullish_confluence ? color.new(#00E676, 92) :
-                show_mtf_confluence and is_bearish_confluence ? color.new(#FF1744, 92) : na
+conf_bg_color = show_mtf_confluence and is_bullish_confluence ? color.new(#00E676, 92) : show_mtf_confluence and is_bearish_confluence ? color.new(#FF1744, 92) : na
 bgcolor(conf_bg_color, title="MTF Confluence BG")
 
 // ════════════════════════════════════════════════════════════════════
