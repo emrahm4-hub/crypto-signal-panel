@@ -1,0 +1,1167 @@
+//@version=5
+indicator("VPMVT Advanced MTF Enhanced System", overlay=false, max_labels_count=500, max_lines_count=500)
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 YENİ ÖZELLİKLER
+// ════════════════════════════════════════════════════════════════════
+// ✅ Özelleştirilebilir Timeframe'ler (13 TF)
+// ✅ Reset Mekanizması (Totalleri sıfırlama)
+// ✅ MTF Confluence Zone Detector
+// ✅ MTF Trend Alignment Score
+// ✅ Dynamic Timeframe Auto-Selector
+// ✅ Repainting FIX (barmerge parametreleri)
+// ✅ Overflow Protection
+// ✅ Performance Optimization
+// ✅ MTF Strength Visualization
+// ════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════
+// İNPUTS - TRADING MODE
+// ════════════════════════════════════════════════════════════════════
+trading_mode = input.string("Day Trader", "Trading Mode", options=["Scalper", "Day Trader", "Swing Trader"], group="Trading Style")
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 CUSTOMIZABLE TIMEFRAMES
+// ════════════════════════════════════════════════════════════════════
+use_custom_tf = input.bool(false, "Use Custom Timeframes", group="⏱️ Timeframes")
+enable_auto_tf = input.bool(true, "Auto-Select TF Based on Chart", group="⏱️ Timeframes", tooltip="Otomatik olarak chart TF'ye göre uygun timeframe'leri seçer")
+
+tf1  = input.timeframe("10S", "TF 1 (Ultra Fast)", group="⏱️ Timeframes")
+tf2  = input.timeframe("1",   "TF 2 (Very Fast)", group="⏱️ Timeframes")
+tf3  = input.timeframe("5",   "TF 3 (Fast)", group="⏱️ Timeframes")
+tf4  = input.timeframe("15",  "TF 4", group="⏱️ Timeframes")
+tf5  = input.timeframe("30",  "TF 5", group="⏱️ Timeframes")
+tf6  = input.timeframe("60",  "TF 6 (1H)", group="⏱️ Timeframes")
+tf7  = input.timeframe("120", "TF 7 (2H)", group="⏱️ Timeframes")
+tf8  = input.timeframe("240", "TF 8 (4H)", group="⏱️ Timeframes")
+tf9  = input.timeframe("480", "TF 9 (8H)", group="⏱️ Timeframes")
+tf10 = input.timeframe("720", "TF 10 (12H)", group="⏱️ Timeframes")
+tf11 = input.timeframe("D",   "TF 11 (Daily)", group="⏱️ Timeframes")
+tf12 = input.timeframe("3D",  "TF 12 (3D)", group="⏱️ Timeframes")
+tf13 = input.timeframe("W",   "TF 13 (Weekly)", group="⏱️ Timeframes")
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 RESET MECHANISM
+// ════════════════════════════════════════════════════════════════════
+reset_on_new_day = input.bool(false, "Reset Totals on New Day", group="🔄 Reset Controls")
+reset_on_new_week = input.bool(false, "Reset Totals on New Week", group="🔄 Reset Controls")
+reset_on_new_month = input.bool(false, "Reset Totals on New Month", group="🔄 Reset Controls")
+manual_reset = input.bool(false, "Manual Reset NOW", group="🔄 Reset Controls", tooltip="Bu seçeneği aktif edip kaydederseniz tüm totaller sıfırlanır")
+
+// Reset condition
+is_new_day = ta.change(dayofmonth) != 0
+is_new_week = ta.change(weekofyear) != 0
+is_new_month = ta.change(month) != 0
+
+should_reset = manual_reset or
+               (reset_on_new_day and is_new_day) or
+               (reset_on_new_week and is_new_week) or
+               (reset_on_new_month and is_new_month)
+
+// ════════════════════════════════════════════════════════════════════
+// DISPLAY SETTINGS
+// ════════════════════════════════════════════════════════════════════
+show_breakout_table = input.bool(true, "Show Breakout Detection Table", group="📊 Display")
+show_htf_ratio = input.bool(true, "Show HTF Ratio", group="📊 Display")
+show_composite = input.bool(true, "Show Composite Score", group="📊 Display")
+show_total_amounts = input.bool(true, "Show All-Time Totals", group="📊 Display")
+show_market_comment = input.bool(true, "Show Market Comment", group="📊 Display")
+show_recent_movement = input.bool(true, "Show Recent Movement", group="📊 Display")
+show_breakout_potential = input.bool(true, "Show Breakout Potential", group="📊 Display")
+show_mtf_confluence = input.bool(true, "🆕 Show MTF Confluence Zone", group="📊 Display")
+show_mtf_alignment = input.bool(true, "🆕 Show MTF Trend Alignment", group="📊 Display")
+show_mtf_strength = input.bool(true, "🆕 Show MTF Strength Score", group="📊 Display")
+
+// ════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ════════════════════════════════════════════════════════════════════
+hh_ll_length = input.int(50, "HH/LL Detection Length", minval=5, maxval=200, group="⚙️ Settings")
+htf_threshold = input.float(60.0, "HTF Bullish Threshold", minval=50, maxval=100, group="⚙️ Settings")
+confluence_threshold = input.int(7, "🆕 MTF Confluence Threshold", minval=3, maxval=13, group="⚙️ Settings", tooltip="Kaç TF aynı yönde olmalı")
+
+// Recent Movement lookback
+recent_lookback = trading_mode == "Scalper" ? 5 : trading_mode == "Day Trader" ? 20 : 50
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 DYNAMIC TIMEFRAME AUTO-SELECTOR
+// ════════════════════════════════════════════════════════════════════
+f_get_higher_tf(_current_tf) =>
+    result = _current_tf == "1"  ? "5"   :
+             _current_tf == "5"  ? "15"  :
+             _current_tf == "15" ? "60"  :
+             _current_tf == "30" ? "60"  :
+             _current_tf == "60" ? "240" :
+             _current_tf == "240"? "D"   :
+             _current_tf == "D"  ? "W"   : "W"
+    result
+
+current_chart_tf = timeframe.period
+auto_htf = f_get_higher_tf(current_chart_tf)
+
+// Use auto TF if enabled
+final_tf1  = enable_auto_tf and not use_custom_tf ? (timeframe.isintraday ? "1" : "D")    : tf1
+final_tf2  = enable_auto_tf and not use_custom_tf ? (timeframe.isintraday ? "5" : "D")    : tf2
+final_tf3  = enable_auto_tf and not use_custom_tf ? (timeframe.isintraday ? "15" : "W")   : tf3
+final_tf4  = enable_auto_tf and not use_custom_tf ? (timeframe.isintraday ? "30" : "W")   : tf4
+final_tf5  = enable_auto_tf and not use_custom_tf ? (timeframe.isintraday ? "60" : "M")   : tf5
+final_tf6  = enable_auto_tf and not use_custom_tf ? "60"  : tf6
+final_tf7  = enable_auto_tf and not use_custom_tf ? "120" : tf7
+final_tf8  = enable_auto_tf and not use_custom_tf ? "240" : tf8
+final_tf9  = enable_auto_tf and not use_custom_tf ? "480" : tf9
+final_tf10 = enable_auto_tf and not use_custom_tf ? "720" : tf10
+final_tf11 = enable_auto_tf and not use_custom_tf ? "D"   : tf11
+final_tf12 = enable_auto_tf and not use_custom_tf ? "3D"  : tf12
+final_tf13 = enable_auto_tf and not use_custom_tf ? "W"   : tf13
+
+// ════════════════════════════════════════════════════════════════════
+// TRACKING VARIABLES (Function dışında tanımlanmalı!)
+// ════════════════════════════════════════════════════════════════════
+var int prev_bullish_count = 0
+var int prev_bearish_count = 0
+var float prev_net_power_bp = 0.0
+
+// ════════════════════════════════════════════════════════════════════
+// NET POWER HESAPLAMA FONKSİYONU (OVERFLOW PROTECTED)
+// ════════════════════════════════════════════════════════════════════
+f_calculate_net_power(_src, _vol, _high, _low, _close_prev, _should_reset) =>
+    // 🆕 Overflow protection: Max değer limiti
+    MAX_VALUE = 1e15
+
+    // 1. Price Change
+    deltaX = ta.change(_src)
+    var float posX = 0.0
+    var float negX = 0.0
+
+    // 🆕 Reset check
+    if _should_reset
+        posX := 0.0
+        negX := 0.0
+
+    posX := deltaX > 0 ? math.min(nz(posX[1]) + deltaX, MAX_VALUE) : nz(posX[1])
+    negX := deltaX < 0 ? math.min(nz(negX[1]) + math.abs(deltaX), MAX_VALUE) : nz(negX[1])
+    totalX = posX + negX
+    posXPercent = totalX > 0 ? posX / totalX * 100 : 0
+    negXPercent = totalX > 0 ? negX / totalX * 100 : 0
+
+    // 2. Momentum
+    price_vol_momentum = deltaX * _vol
+    var float posMom = 0.0
+    var float negMom = 0.0
+
+    if _should_reset
+        posMom := 0.0
+        negMom := 0.0
+
+    posMom := price_vol_momentum > 0 ? math.min(nz(posMom[1]) + price_vol_momentum, MAX_VALUE) : nz(posMom[1])
+    negMom := price_vol_momentum < 0 ? math.min(nz(negMom[1]) + math.abs(price_vol_momentum), MAX_VALUE) : nz(negMom[1])
+    totalMom = posMom + negMom
+    posMomPercent = totalMom > 0 ? posMom / totalMom * 100 : 0
+    negMomPercent = totalMom > 0 ? negMom / totalMom * 100 : 0
+
+    // 3. Acceleration
+    roc_value = ta.roc(_src, 14)
+    var float posAcc = 0.0
+    var float negAcc = 0.0
+
+    if _should_reset
+        posAcc := 0.0
+        negAcc := 0.0
+
+    posAcc := roc_value > 0 ? math.min(nz(posAcc[1]) + roc_value, MAX_VALUE) : nz(posAcc[1])
+    negAcc := roc_value < 0 ? math.min(nz(negAcc[1]) + math.abs(roc_value), MAX_VALUE) : nz(negAcc[1])
+    totalAcc = posAcc + negAcc
+    posAccPercent = totalAcc > 0 ? posAcc / totalAcc * 100 : 0
+    negAccPercent = totalAcc > 0 ? negAcc / totalAcc * 100 : 0
+
+    // 4. Volume Pressure
+    volume_pressure = deltaX > 0 ? _vol : deltaX < 0 ? -_vol : 0
+    var float posVP = 0.0
+    var float negVP = 0.0
+
+    if _should_reset
+        posVP := 0.0
+        negVP := 0.0
+
+    posVP := volume_pressure > 0 ? math.min(nz(posVP[1]) + volume_pressure, MAX_VALUE) : nz(posVP[1])
+    negVP := volume_pressure < 0 ? math.min(nz(negVP[1]) + math.abs(volume_pressure), MAX_VALUE) : nz(negVP[1])
+    totalVP = posVP + negVP
+    posVPPercent = totalVP > 0 ? posVP / totalVP * 100 : 0
+    negVPPercent = totalVP > 0 ? negVP / totalVP * 100 : 0
+
+    // 5. Volatility
+    tr = math.max(_high - _low, math.max(math.abs(_high - _close_prev), math.abs(_low - _close_prev)))
+    volatility_up = _src > _close_prev ? tr : 0
+    volatility_down = _src < _close_prev ? tr : 0
+    var float cum_vol_up = 0.0
+    var float cum_vol_down = 0.0
+
+    if _should_reset
+        cum_vol_up := 0.0
+        cum_vol_down := 0.0
+
+    cum_vol_up := math.min(nz(cum_vol_up[1]) + volatility_up, MAX_VALUE)
+    cum_vol_down := math.min(nz(cum_vol_down[1]) + volatility_down, MAX_VALUE)
+    total_vol = cum_vol_up + cum_vol_down
+    vol_up_pct = total_vol > 0 ? cum_vol_up / total_vol * 100 : 0
+    vol_down_pct = total_vol > 0 ? cum_vol_down / total_vol * 100 : 0
+
+    // 6. Time Analysis
+    range_tf = _high - _low
+    momentum_tf = ta.change(_src)
+    var float pos_time = 0.0
+    var float neg_time = 0.0
+
+    if _should_reset
+        pos_time := 0.0
+        neg_time := 0.0
+
+    pos_time := momentum_tf > 0 ? math.min(nz(pos_time[1]) + range_tf, MAX_VALUE) : nz(pos_time[1])
+    neg_time := momentum_tf < 0 ? math.min(nz(neg_time[1]) + range_tf, MAX_VALUE) : nz(neg_time[1])
+    total_time = pos_time + neg_time
+    time_pct = total_time > 0 ? pos_time / total_time * 100 : 50
+
+    // Unified Composite
+    total_pos = posXPercent + posMomPercent + posAccPercent + posVPPercent + vol_up_pct + time_pct
+    total_neg = negXPercent + negMomPercent + negAccPercent + negVPPercent + vol_down_pct + (100 - time_pct)
+    grand_total = total_pos + total_neg
+    bullish_pct = grand_total > 0 ? total_pos / grand_total * 100 : 50
+    net_power = bullish_pct - (100 - bullish_pct)
+
+    // All-time totals
+    [net_power, bullish_pct, posX + posMom + posAcc, negX + negMom + negAcc, totalVP]
+
+// ════════════════════════════════════════════════════════════════════
+// HH/LL TESPİT FONKSİYONU
+// ════════════════════════════════════════════════════════════════════
+f_detect_hh_ll(_high, _low, _close, _length) =>
+    hh = ta.highest(_high, _length)
+    ll = ta.lowest(_low, _length)
+    hh_break = _close > hh[1]
+    ll_break = _close < ll[1]
+    [hh, ll, hh_break, ll_break]
+
+// ════════════════════════════════════════════════════════════════════
+// BREAKOUT POTENTIAL DETECTOR
+// ════════════════════════════════════════════════════════════════════
+f_breakout_potential(_lookback, _htf_bull, _htf_bear, _net_power) =>
+    // 1. VOLUME TREND
+    current_vol = volume
+    avg_vol_short = ta.sma(volume, 10)
+    avg_vol_long = ta.sma(volume, 50)
+    vol_ratio = avg_vol_short / avg_vol_long
+    vol_score = vol_ratio > 2.0 ? 30 : vol_ratio > 1.5 ? 25 : vol_ratio > 1.2 ? 15 : vol_ratio > 1.0 ? 5 : 0
+    vol_trend = vol_ratio > 1.5 ? "RISING ⬆️" : vol_ratio > 1.0 ? "Normal 📊" : "LOW 📉"
+
+    // 2. PRICE COMPRESSION
+    atr_current = ta.atr(14)
+    atr_long = ta.sma(ta.atr(14), 50)
+    compression_ratio = atr_current / atr_long
+    compression_bars = 0
+    for i = 0 to 19
+        if ta.atr(14)[i] < atr_long
+            compression_bars += 1
+    compression_score = compression_ratio < 0.5 ? 25 : compression_ratio < 0.7 ? 20 : compression_ratio < 0.85 ? 10 : 0
+    compression_status = compression_ratio < 0.6 ? "TIGHT! 🔥" : compression_ratio < 0.8 ? "Narrowing 📉" : "Normal 📊"
+
+    // 3. HTF ALIGNMENT
+    alignment_score = _htf_bull >= 6 ? 25 : _htf_bull >= 4 ? 15 : _htf_bear >= 6 ? 25 : _htf_bear >= 4 ? 15 : 0
+    alignment_status = _htf_bull > prev_bullish_count ? "BULLISH BUILDING 📈" :
+                      _htf_bear > prev_bearish_count ? "BEARISH BUILDING 📉" : "Stable ➡️"
+
+    // 4. NET POWER MOMENTUM
+    net_power_change = _net_power - nz(prev_net_power_bp)
+    net_power_momentum_score = math.abs(net_power_change) > 10 ? 20 : math.abs(net_power_change) > 5 ? 15 : math.abs(net_power_change) > 2 ? 10 : 0
+    net_power_status = net_power_change > 5 ? "RISING ⬆️" : net_power_change < -5 ? "FALLING ⬇️" : "Stable ➡️"
+
+    // 5. TOTAL SCORE
+    total_score = vol_score + compression_score + alignment_score + net_power_momentum_score
+
+    // 6. BREAKOUT DIRECTION & PROBABILITY
+    breakout_direction = ""
+    breakout_probability = 0.0
+
+    if _htf_bull >= 5 and _net_power > 0
+        breakout_direction := "UP 🚀"
+        breakout_probability := math.min(50 + (_htf_bull * 5) + (_net_power / 2), 95)
+    else if _htf_bear >= 5 and _net_power < 0
+        breakout_direction := "DOWN 💥"
+        breakout_probability := math.min(50 + (_htf_bear * 5) + (math.abs(_net_power) / 2), 95)
+    else if _net_power > 10
+        breakout_direction := "UP 🚀"
+        breakout_probability := 60 + _net_power
+    else if _net_power < -10
+        breakout_direction := "DOWN 💥"
+        breakout_probability := 60 + math.abs(_net_power)
+    else
+        breakout_direction := "UNCLEAR ⚖️"
+        breakout_probability := 50
+
+    // 7. STRENGTH
+    breakout_strength = total_score > 80 ? "VERY HIGH 🔥" :
+                       total_score > 60 ? "HIGH 💥" :
+                       total_score > 40 ? "MEDIUM ⚡" : "LOW 📊"
+
+    // 8. EXPECTED TIMEFRAME
+    expected_bars = compression_bars > 15 ? "1-5 bars" : compression_bars > 10 ? "3-10 bars" : compression_bars > 5 ? "5-15 bars" : "10-20 bars"
+
+    // 9. TARGETS
+    current_price = close
+    atr_for_target = ta.atr(14)
+    target_1 = breakout_direction == "UP 🚀" ? current_price + (atr_for_target * 1.5) :
+               breakout_direction == "DOWN 💥" ? current_price - (atr_for_target * 1.5) : current_price
+    target_2 = breakout_direction == "UP 🚀" ? current_price + (atr_for_target * 3.0) :
+               breakout_direction == "DOWN 💥" ? current_price - (atr_for_target * 3.0) : current_price
+
+    // 10. STOP LEVEL
+    invalidation = breakout_direction == "UP 🚀" ? current_price - (atr_for_target * 1.0) :
+                   breakout_direction == "DOWN 💥" ? current_price + (atr_for_target * 1.0) : current_price
+
+    [total_score, vol_trend, vol_ratio, compression_status, compression_bars, alignment_status,
+     net_power_status, breakout_direction, breakout_probability, breakout_strength, expected_bars,
+     target_1, target_2, invalidation]
+
+// ════════════════════════════════════════════════════════════════════
+// RECENT MOVEMENT ANALİZİ
+// ════════════════════════════════════════════════════════════════════
+f_recent_movement(_lookback) =>
+    price_start = close[_lookback]
+    price_now = close
+    price_change = ((price_now - price_start) / price_start) * 100
+
+    avg_volume = ta.sma(volume, _lookback)
+    current_volume = volume
+    volume_ratio = current_volume / avg_volume
+    volume_strength = volume_ratio > 1.5 ? "HIGH 💥" : volume_ratio > 1.0 ? "NORMAL 📊" : "LOW 📉"
+
+    recent_momentum = ta.sma(close, 5) - ta.sma(close[5], 5)
+    momentum_direction = recent_momentum > 0 ? "UP ⬆️" : recent_momentum < 0 ? "DOWN ⬇️" : "FLAT ➡️"
+    momentum_strength = math.abs(recent_momentum) > (ta.atr(14) * 0.5) ? "STRONG" : "WEAK"
+
+    trend_direction = price_change > 2 ? "STRONG UP 🚀" :
+                     price_change > 0 ? "UP 📈" :
+                     price_change < -2 ? "STRONG DOWN 💥" :
+                     price_change < 0 ? "DOWN 📉" : "FLAT ➡️"
+
+    signal = ""
+    signal_color = color.gray
+
+    if price_change > 2 and volume_ratio > 1.2
+        signal := "LONG SETUP! 🟢"
+        signal_color := #00C853
+    else if price_change > 0 and volume_ratio > 1.0
+        signal := "Weak Long 📈"
+        signal_color := #4CAF50
+    else if price_change < -2 and volume_ratio > 1.2
+        signal := "SHORT SETUP! 🔴"
+        signal_color := #F44336
+    else if price_change < 0 and volume_ratio > 1.0
+        signal := "Weak Short 📉"
+        signal_color := #FF5252
+    else
+        signal := "Wait ⚖️"
+        signal_color := #FF9800
+
+    [price_change, volume_strength, volume_ratio, momentum_direction, momentum_strength, trend_direction, signal, signal_color]
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 MTF CONFLUENCE ZONE DETECTOR
+// ════════════════════════════════════════════════════════════════════
+f_mtf_confluence(_bull_array, _threshold) =>
+    bullish_count = 0
+    bearish_count = 0
+
+    for i = 0 to array.size(_bull_array) - 1
+        bull_val = array.get(_bull_array, i)
+        if bull_val >= 60
+            bullish_count += 1
+        else if bull_val <= 40
+            bearish_count += 1
+
+    is_confluence = bullish_count >= _threshold or bearish_count >= _threshold
+    confluence_type = bullish_count >= _threshold ? "BULLISH" : bearish_count >= _threshold ? "BEARISH" : "MIXED"
+    confluence_strength = math.max(bullish_count, bearish_count)
+
+    [is_confluence, confluence_type, confluence_strength, bullish_count, bearish_count]
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 MTF TREND ALIGNMENT SCORE
+// ════════════════════════════════════════════════════════════════════
+f_mtf_alignment(_net_array) =>
+    positive_count = 0
+    negative_count = 0
+    strong_positive = 0
+    strong_negative = 0
+
+    for i = 0 to array.size(_net_array) - 1
+        net_val = array.get(_net_array, i)
+        if net_val > 10
+            strong_positive += 1
+            positive_count += 1
+        else if net_val > 0
+            positive_count += 1
+        else if net_val < -10
+            strong_negative += 1
+            negative_count += 1
+        else if net_val < 0
+            negative_count += 1
+
+    total_tf = array.size(_net_array)
+    alignment_score = positive_count >= negative_count ?
+                     (positive_count / total_tf * 100) :
+                     (negative_count / total_tf * 100)
+
+    alignment_direction = positive_count > negative_count ? "BULLISH" :
+                         negative_count > positive_count ? "BEARISH" : "NEUTRAL"
+
+    alignment_quality = strong_positive >= 8 ? "VERY STRONG BULL 🔥" :
+                       strong_positive >= 5 ? "STRONG BULL 💪" :
+                       strong_negative >= 8 ? "VERY STRONG BEAR ❄️" :
+                       strong_negative >= 5 ? "STRONG BEAR 💥" : "WEAK/MIXED ⚖️"
+
+    [alignment_score, alignment_direction, alignment_quality, strong_positive, strong_negative]
+
+// ════════════════════════════════════════════════════════════════════
+// CURRENT TF NET POWER
+// ════════════════════════════════════════════════════════════════════
+[net_power_current, bullish_current, pos_total_current, neg_total_current, vp_total_current] =
+     f_calculate_net_power(close, volume, high, low, close[1], should_reset)
+
+// Main plot
+plot(net_power_current,
+     color = net_power_current > 0 ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+     title="NET POWER",
+     linewidth=4)
+hline(0, "Zero", color=color.gray, linestyle=hline.style_dashed)
+
+// ════════════════════════════════════════════════════════════════════
+// MULTI-TIMEFRAME ANALYSIS (13 TF) - 🆕 REPAINTING FIX
+// ════════════════════════════════════════════════════════════════════
+
+// TF 1
+[close_tf1, high_tf1, low_tf1, vol_tf1] = request.security(syminfo.tickerid, final_tf1, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf1 = request.security(syminfo.tickerid, final_tf1, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf1, bull_tf1, pos_tf1, neg_tf1, vp_tf1] = f_calculate_net_power(close_tf1, vol_tf1, high_tf1, low_tf1, close_prev_tf1, should_reset)
+[hh_tf1, ll_tf1, hh_break_tf1, ll_break_tf1] = f_detect_hh_ll(high_tf1, low_tf1, close_tf1, hh_ll_length)
+
+// TF 2
+[close_tf2, high_tf2, low_tf2, vol_tf2] = request.security(syminfo.tickerid, final_tf2, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf2 = request.security(syminfo.tickerid, final_tf2, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf2, bull_tf2, pos_tf2, neg_tf2, vp_tf2] = f_calculate_net_power(close_tf2, vol_tf2, high_tf2, low_tf2, close_prev_tf2, should_reset)
+[hh_tf2, ll_tf2, hh_break_tf2, ll_break_tf2] = f_detect_hh_ll(high_tf2, low_tf2, close_tf2, hh_ll_length)
+
+// TF 3
+[close_tf3, high_tf3, low_tf3, vol_tf3] = request.security(syminfo.tickerid, final_tf3, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf3 = request.security(syminfo.tickerid, final_tf3, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf3, bull_tf3, pos_tf3, neg_tf3, vp_tf3] = f_calculate_net_power(close_tf3, vol_tf3, high_tf3, low_tf3, close_prev_tf3, should_reset)
+[hh_tf3, ll_tf3, hh_break_tf3, ll_break_tf3] = f_detect_hh_ll(high_tf3, low_tf3, close_tf3, hh_ll_length)
+
+// TF 4
+[close_tf4, high_tf4, low_tf4, vol_tf4] = request.security(syminfo.tickerid, final_tf4, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf4 = request.security(syminfo.tickerid, final_tf4, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf4, bull_tf4, pos_tf4, neg_tf4, vp_tf4] = f_calculate_net_power(close_tf4, vol_tf4, high_tf4, low_tf4, close_prev_tf4, should_reset)
+[hh_tf4, ll_tf4, hh_break_tf4, ll_break_tf4] = f_detect_hh_ll(high_tf4, low_tf4, close_tf4, hh_ll_length)
+
+// TF 5
+[close_tf5, high_tf5, low_tf5, vol_tf5] = request.security(syminfo.tickerid, final_tf5, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf5 = request.security(syminfo.tickerid, final_tf5, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf5, bull_tf5, pos_tf5, neg_tf5, vp_tf5] = f_calculate_net_power(close_tf5, vol_tf5, high_tf5, low_tf5, close_prev_tf5, should_reset)
+[hh_tf5, ll_tf5, hh_break_tf5, ll_break_tf5] = f_detect_hh_ll(high_tf5, low_tf5, close_tf5, hh_ll_length)
+
+// TF 6 (1H)
+[close_tf6, high_tf6, low_tf6, vol_tf6] = request.security(syminfo.tickerid, final_tf6, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf6 = request.security(syminfo.tickerid, final_tf6, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf6, bull_tf6, pos_tf6, neg_tf6, vp_tf6] = f_calculate_net_power(close_tf6, vol_tf6, high_tf6, low_tf6, close_prev_tf6, should_reset)
+[hh_tf6, ll_tf6, hh_break_tf6, ll_break_tf6] = f_detect_hh_ll(high_tf6, low_tf6, close_tf6, hh_ll_length)
+
+// TF 7 (2H)
+[close_tf7, high_tf7, low_tf7, vol_tf7] = request.security(syminfo.tickerid, final_tf7, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf7 = request.security(syminfo.tickerid, final_tf7, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf7, bull_tf7, pos_tf7, neg_tf7, vp_tf7] = f_calculate_net_power(close_tf7, vol_tf7, high_tf7, low_tf7, close_prev_tf7, should_reset)
+[hh_tf7, ll_tf7, hh_break_tf7, ll_break_tf7] = f_detect_hh_ll(high_tf7, low_tf7, close_tf7, hh_ll_length)
+
+// TF 8 (4H)
+[close_tf8, high_tf8, low_tf8, vol_tf8] = request.security(syminfo.tickerid, final_tf8, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf8 = request.security(syminfo.tickerid, final_tf8, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf8, bull_tf8, pos_tf8, neg_tf8, vp_tf8] = f_calculate_net_power(close_tf8, vol_tf8, high_tf8, low_tf8, close_prev_tf8, should_reset)
+[hh_tf8, ll_tf8, hh_break_tf8, ll_break_tf8] = f_detect_hh_ll(high_tf8, low_tf8, close_tf8, hh_ll_length)
+
+// TF 9 (8H)
+[close_tf9, high_tf9, low_tf9, vol_tf9] = request.security(syminfo.tickerid, final_tf9, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf9 = request.security(syminfo.tickerid, final_tf9, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf9, bull_tf9, pos_tf9, neg_tf9, vp_tf9] = f_calculate_net_power(close_tf9, vol_tf9, high_tf9, low_tf9, close_prev_tf9, should_reset)
+[hh_tf9, ll_tf9, hh_break_tf9, ll_break_tf9] = f_detect_hh_ll(high_tf9, low_tf9, close_tf9, hh_ll_length)
+
+// TF 10 (12H)
+[close_tf10, high_tf10, low_tf10, vol_tf10] = request.security(syminfo.tickerid, final_tf10, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf10 = request.security(syminfo.tickerid, final_tf10, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf10, bull_tf10, pos_tf10, neg_tf10, vp_tf10] = f_calculate_net_power(close_tf10, vol_tf10, high_tf10, low_tf10, close_prev_tf10, should_reset)
+[hh_tf10, ll_tf10, hh_break_tf10, ll_break_tf10] = f_detect_hh_ll(high_tf10, low_tf10, close_tf10, hh_ll_length)
+
+// TF 11 (Daily)
+[close_tf11, high_tf11, low_tf11, vol_tf11] = request.security(syminfo.tickerid, final_tf11, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf11 = request.security(syminfo.tickerid, final_tf11, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf11, bull_tf11, pos_tf11, neg_tf11, vp_tf11] = f_calculate_net_power(close_tf11, vol_tf11, high_tf11, low_tf11, close_prev_tf11, should_reset)
+[hh_tf11, ll_tf11, hh_break_tf11, ll_break_tf11] = f_detect_hh_ll(high_tf11, low_tf11, close_tf11, hh_ll_length)
+
+// TF 12 (3D)
+[close_tf12, high_tf12, low_tf12, vol_tf12] = request.security(syminfo.tickerid, final_tf12, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf12 = request.security(syminfo.tickerid, final_tf12, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf12, bull_tf12, pos_tf12, neg_tf12, vp_tf12] = f_calculate_net_power(close_tf12, vol_tf12, high_tf12, low_tf12, close_prev_tf12, should_reset)
+[hh_tf12, ll_tf12, hh_break_tf12, ll_break_tf12] = f_detect_hh_ll(high_tf12, low_tf12, close_tf12, hh_ll_length)
+
+// TF 13 (Weekly)
+[close_tf13, high_tf13, low_tf13, vol_tf13] = request.security(syminfo.tickerid, final_tf13, [close, high, low, volume], barmerge.gaps_off, barmerge.lookahead_off)
+close_prev_tf13 = request.security(syminfo.tickerid, final_tf13, close[1], barmerge.gaps_off, barmerge.lookahead_off)
+[net_tf13, bull_tf13, pos_tf13, neg_tf13, vp_tf13] = f_calculate_net_power(close_tf13, vol_tf13, high_tf13, low_tf13, close_prev_tf13, should_reset)
+[hh_tf13, ll_tf13, hh_break_tf13, ll_break_tf13] = f_detect_hh_ll(high_tf13, low_tf13, close_tf13, hh_ll_length)
+
+// ════════════════════════════════════════════════════════════════════
+// 🆕 MTF CONFLUENCE & ALIGNMENT ANALYSIS
+// ════════════════════════════════════════════════════════════════════
+var bull_array = array.new_float(13)
+array.set(bull_array, 0, bull_tf1)
+array.set(bull_array, 1, bull_tf2)
+array.set(bull_array, 2, bull_tf3)
+array.set(bull_array, 3, bull_tf4)
+array.set(bull_array, 4, bull_tf5)
+array.set(bull_array, 5, bull_tf6)
+array.set(bull_array, 6, bull_tf7)
+array.set(bull_array, 7, bull_tf8)
+array.set(bull_array, 8, bull_tf9)
+array.set(bull_array, 9, bull_tf10)
+array.set(bull_array, 10, bull_tf11)
+array.set(bull_array, 11, bull_tf12)
+array.set(bull_array, 12, bull_tf13)
+
+var net_array = array.new_float(13)
+array.set(net_array, 0, net_tf1)
+array.set(net_array, 1, net_tf2)
+array.set(net_array, 2, net_tf3)
+array.set(net_array, 3, net_tf4)
+array.set(net_array, 4, net_tf5)
+array.set(net_array, 5, net_tf6)
+array.set(net_array, 6, net_tf7)
+array.set(net_array, 7, net_tf8)
+array.set(net_array, 8, net_tf9)
+array.set(net_array, 9, net_tf10)
+array.set(net_array, 10, net_tf11)
+array.set(net_array, 11, net_tf12)
+array.set(net_array, 12, net_tf13)
+
+[is_confluence, confluence_type, confluence_strength, conf_bull_count, conf_bear_count] =
+     f_mtf_confluence(bull_array, confluence_threshold)
+
+[alignment_score, alignment_direction, alignment_quality, strong_bull_count, strong_bear_count] =
+     f_mtf_alignment(net_array)
+
+// ════════════════════════════════════════════════════════════════════
+// HTF RATIO CALCULATION
+// ════════════════════════════════════════════════════════════════════
+htf_bullish_count = 0
+htf_bearish_count = 0
+
+// HTF = 1h and above (tf6 onwards)
+if bull_tf6 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf6 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf7 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf7 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf8 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf8 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf9 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf9 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf10 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf10 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf11 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf11 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf12 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf12 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+if bull_tf13 >= htf_threshold
+    htf_bullish_count += 1
+else if bull_tf13 < (100 - htf_threshold)
+    htf_bearish_count += 1
+
+htf_total = htf_bullish_count + htf_bearish_count
+htf_bullish_ratio = htf_total > 0 ? htf_bullish_count / htf_total * 100 : 50
+
+// ════════════════════════════════════════════════════════════════════
+// COMPOSITE SCORE
+// ════════════════════════════════════════════════════════════════════
+composite_score = (bull_tf1 * 0.5 + bull_tf2 * 0.7 + bull_tf3 * 1.0 + bull_tf4 * 1.2 +
+                   bull_tf5 * 1.5 + bull_tf6 * 2.0 + bull_tf7 * 2.5 + bull_tf8 * 3.0 +
+                   bull_tf9 * 3.5 + bull_tf10 * 4.0 + bull_tf11 * 5.0 + bull_tf12 * 6.0 + bull_tf13 * 7.0) /
+                  (0.5 + 0.7 + 1.0 + 1.2 + 1.5 + 2.0 + 2.5 + 3.0 + 3.5 + 4.0 + 5.0 + 6.0 + 7.0)
+
+composite_net_power = composite_score - (100 - composite_score)
+
+// ════════════════════════════════════════════════════════════════════
+// ALL-TIME TOTALS
+// ════════════════════════════════════════════════════════════════════
+all_time_positive = pos_tf1 + pos_tf2 + pos_tf3 + pos_tf4 + pos_tf5 + pos_tf6 + pos_tf7 + pos_tf8 + pos_tf9 + pos_tf10 + pos_tf11 + pos_tf12 + pos_tf13
+all_time_negative = neg_tf1 + neg_tf2 + neg_tf3 + neg_tf4 + neg_tf5 + neg_tf6 + neg_tf7 + neg_tf8 + neg_tf9 + neg_tf10 + neg_tf11 + neg_tf12 + neg_tf13
+all_time_volume_pressure = vp_tf1 + vp_tf2 + vp_tf3 + vp_tf4 + vp_tf5 + vp_tf6 + vp_tf7 + vp_tf8 + vp_tf9 + vp_tf10 + vp_tf11 + vp_tf12 + vp_tf13
+all_time_net = all_time_positive - all_time_negative
+
+var float prev_net_total = 0.0
+net_change = all_time_net - nz(prev_net_total)
+prev_net_total := all_time_net
+
+net_trend = net_change > 0 ? "RISING ⬆️" : net_change < 0 ? "FALLING ⬇️" : "STABLE ➡️"
+buying_power = all_time_net > 0 and net_change > 0 ? "BUY POWER UP 🚀" :
+               all_time_net > 0 and net_change < 0 ? "BUY POWER WEAK ⚠️" :
+               all_time_net < 0 and net_change < 0 ? "SELL PRESSURE UP 💥" :
+               all_time_net < 0 and net_change > 0 ? "SELL PRESSURE DOWN 📈" : "BALANCED ⚖️"
+
+pos_simplified = all_time_positive / 1000000000
+neg_simplified = all_time_negative / 1000000000
+net_simplified = all_time_net / 1000000000
+vp_simplified = all_time_volume_pressure / 1000000000
+
+// ════════════════════════════════════════════════════════════════════
+// RECENT MOVEMENT
+// ════════════════════════════════════════════════════════════════════
+[recent_change, recent_vol_str, recent_vol_ratio, recent_momentum_dir, recent_momentum_str, recent_trend, recent_signal, recent_signal_color] =
+     f_recent_movement(recent_lookback)
+
+// ════════════════════════════════════════════════════════════════════
+// BREAKOUT POTENTIAL
+// ════════════════════════════════════════════════════════════════════
+[bp_score, bp_vol_trend, bp_vol_ratio, bp_compression, bp_comp_bars, bp_alignment,
+ bp_net_power, bp_direction, bp_probability, bp_strength, bp_time, bp_target1, bp_target2, bp_stop] =
+     f_breakout_potential(20, htf_bullish_count, htf_bearish_count, net_power_current)
+
+// Update tracking variables
+prev_bullish_count := htf_bullish_count
+prev_bearish_count := htf_bearish_count
+prev_net_power_bp := net_power_current
+
+bp_is_bullish = str.contains(bp_direction, "UP")
+bp_is_bearish = str.contains(bp_direction, "DOWN")
+
+// ════════════════════════════════════════════════════════════════════
+// MARKET ANALYSIS
+// ════════════════════════════════════════════════════════════════════
+general_trend = all_time_net > 0 ? "BULLISH" : all_time_net < 0 ? "BEARISH" : "NEUTRAL"
+htf_status = htf_bullish_ratio >= 60 ? "HTF Bullish" : htf_bullish_ratio <= 40 ? "HTF Bearish" : "HTF Mixed"
+
+market_condition = ""
+if general_trend == "BULLISH" and htf_bullish_ratio >= 60
+    market_condition := "🚀 STRONG UPTREND"
+else if general_trend == "BULLISH" and htf_bullish_ratio < 60
+    market_condition := "⚠️ PULLBACK (Uptrend)"
+else if general_trend == "BEARISH" and htf_bullish_ratio <= 40
+    market_condition := "💥 STRONG DOWNTREND"
+else if general_trend == "BEARISH" and htf_bullish_ratio > 40
+    market_condition := "📈 RECOVERY (Downtrend)"
+else
+    market_condition := "⚖️ RANGING MARKET"
+
+trade_suggestion = ""
+if htf_bullish_ratio >= 70 and composite_score >= 60
+    trade_suggestion := "LONG position favorable"
+else if htf_bullish_ratio <= 30 and composite_score <= 40
+    trade_suggestion := "SHORT position favorable"
+else if htf_bullish_ratio >= 60 and composite_score < 50
+    trade_suggestion := "HTF bullish but weak momentum - careful LONG"
+else if htf_bullish_ratio <= 40 and composite_score > 50
+    trade_suggestion := "HTF bearish but momentum up - conflict"
+else
+    trade_suggestion := "Wait for clear signal"
+
+// ════════════════════════════════════════════════════════════════════
+// BREAKOUT DETECTION
+// ════════════════════════════════════════════════════════════════════
+breakout_tf = ""
+breakout_type = ""
+
+if hh_break_tf13
+    breakout_tf := final_tf13
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf13
+    breakout_tf := final_tf13
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf12
+    breakout_tf := final_tf12
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf12
+    breakout_tf := final_tf12
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf11
+    breakout_tf := final_tf11
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf11
+    breakout_tf := final_tf11
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf10
+    breakout_tf := final_tf10
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf10
+    breakout_tf := final_tf10
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf9
+    breakout_tf := final_tf9
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf9
+    breakout_tf := final_tf9
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf8
+    breakout_tf := final_tf8
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf8
+    breakout_tf := final_tf8
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf7
+    breakout_tf := final_tf7
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf7
+    breakout_tf := final_tf7
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf6
+    breakout_tf := final_tf6
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf6
+    breakout_tf := final_tf6
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf5
+    breakout_tf := final_tf5
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf5
+    breakout_tf := final_tf5
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf4
+    breakout_tf := final_tf4
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf4
+    breakout_tf := final_tf4
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf3
+    breakout_tf := final_tf3
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf3
+    breakout_tf := final_tf3
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf2
+    breakout_tf := final_tf2
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf2
+    breakout_tf := final_tf2
+    breakout_type := "LL BREAK ⬇️"
+else if hh_break_tf1
+    breakout_tf := final_tf1
+    breakout_type := "HH BREAK ⬆️"
+else if ll_break_tf1
+    breakout_tf := final_tf1
+    breakout_type := "LL BREAK ⬇️"
+else
+    breakout_tf := "NONE"
+    breakout_type := "NO BREAK"
+
+// ════════════════════════════════════════════════════════════════════
+// VISUAL SIGNALS
+// ════════════════════════════════════════════════════════════════════
+
+// Recent Movement Signals
+recent_bg_color = show_recent_movement and recent_change > 3 and recent_vol_ratio > 1.5 ? color.new(#00C853, 90) :
+                  show_recent_movement and recent_change < -3 and recent_vol_ratio > 1.5 ? color.new(#F44336, 90) : na
+bgcolor(recent_bg_color, title="Recent Movement BG")
+
+plotshape(show_recent_movement and recent_change > 3 and recent_vol_ratio > 1.5,
+          style=shape.triangleup, location=location.bottom, color=#00C853, size=size.small,
+          title="Long Setup", text="LONG")
+
+plotshape(show_recent_movement and recent_change < -3 and recent_vol_ratio > 1.5,
+          style=shape.triangledown, location=location.top, color=#F44336, size=size.small,
+          title="Short Setup", text="SHORT")
+
+// Breakout Potential Signals
+plotshape(show_breakout_potential and bp_score > 75 and bp_is_bullish,
+          style=shape.diamond, location=location.belowbar, color=#FF6B00, size=size.normal,
+          title="Breakout Potential UP", text="BP⬆")
+
+plotshape(show_breakout_potential and bp_score > 75 and bp_is_bearish,
+          style=shape.diamond, location=location.abovebar, color=#FF6B00, size=size.normal,
+          title="Breakout Potential DOWN", text="BP⬇")
+
+bp_bg_color = show_breakout_potential and bp_score > 80 ? color.new(#FF6B00, 95) : na
+bgcolor(bp_bg_color, title="High Breakout Potential BG")
+
+// 🆕 MTF Confluence Signals
+plotshape(show_mtf_confluence and is_confluence and confluence_type == "BULLISH",
+          style=shape.circle, location=location.bottom, color=#00E676, size=size.large,
+          title="MTF Bullish Confluence", text="CF🟢")
+
+plotshape(show_mtf_confluence and is_confluence and confluence_type == "BEARISH",
+          style=shape.circle, location=location.top, color=#FF1744, size=size.large,
+          title="MTF Bearish Confluence", text="CF🔴")
+
+conf_bg_color = show_mtf_confluence and is_confluence and confluence_type == "BULLISH" ? color.new(#00E676, 92) :
+                show_mtf_confluence and is_confluence and confluence_type == "BEARISH" ? color.new(#FF1744, 92) : na
+bgcolor(conf_bg_color, title="MTF Confluence BG")
+
+// ════════════════════════════════════════════════════════════════════
+// TABLE 1 - LEFT SIDE (TIMEFRAMES)
+// ════════════════════════════════════════════════════════════════════
+var table tf_table = table.new(position.middle_left, 6, 20, border_width=2, frame_color=#1E88E5, frame_width=2)
+
+if barstate.islast
+    table.clear(tf_table, 0, 0, 5, 19)
+
+    // Header
+    table.cell(tf_table, 0, 0, "⏱️ TIMEFRAMES",
+               bgcolor=#0D47A1, text_color=color.white, text_size=size.normal)
+    table.merge_cells(tf_table, 0, 0, 5, 0)
+
+    row = 1
+
+    // Column Headers
+    table.cell(tf_table, 0, row, "TF", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    table.cell(tf_table, 1, row, "NET", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    table.cell(tf_table, 2, row, "BULL%", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    table.cell(tf_table, 3, row, "SIG", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    table.cell(tf_table, 4, row, "HH", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    table.cell(tf_table, 5, row, "LL", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+    row += 1
+
+    // Data
+    var string[] tf_labels = array.from(final_tf1, final_tf2, final_tf3, final_tf4, final_tf5, final_tf6,
+                                        final_tf7, final_tf8, final_tf9, final_tf10, final_tf11, final_tf12, final_tf13)
+    var float[]  tf_nets   = array.from(net_tf1, net_tf2, net_tf3, net_tf4, net_tf5, net_tf6,
+                                        net_tf7, net_tf8, net_tf9, net_tf10, net_tf11, net_tf12, net_tf13)
+    var float[]  tf_bulls  = array.from(bull_tf1, bull_tf2, bull_tf3, bull_tf4, bull_tf5, bull_tf6,
+                                        bull_tf7, bull_tf8, bull_tf9, bull_tf10, bull_tf11, bull_tf12, bull_tf13)
+    var bool[]   tf_hh     = array.from(hh_break_tf1, hh_break_tf2, hh_break_tf3, hh_break_tf4, hh_break_tf5, hh_break_tf6,
+                                        hh_break_tf7, hh_break_tf8, hh_break_tf9, hh_break_tf10, hh_break_tf11, hh_break_tf12, hh_break_tf13)
+    var bool[]   tf_ll     = array.from(ll_break_tf1, ll_break_tf2, ll_break_tf3, ll_break_tf4, ll_break_tf5, ll_break_tf6,
+                                        ll_break_tf7, ll_break_tf8, ll_break_tf9, ll_break_tf10, ll_break_tf11, ll_break_tf12, ll_break_tf13)
+
+    for i = 0 to 12
+        tf_label = array.get(tf_labels, i)
+        tf_net   = array.get(tf_nets, i)
+        tf_bull  = array.get(tf_bulls, i)
+        tf_hh_break = array.get(tf_hh, i)
+        tf_ll_break = array.get(tf_ll, i)
+
+        net_col = tf_net > 0 ? #00C853 : #F44336
+        bull_col = tf_bull >= 60 ? #00C853 : tf_bull <= 40 ? #F44336 : #FF9800
+        signal_txt = tf_bull >= 70 ? "🚀" : tf_bull >= 60 ? "📈" : tf_bull <= 30 ? "💥" : tf_bull <= 40 ? "📉" : "⚖️"
+
+        table.cell(tf_table, 0, row, tf_label, bgcolor=#455A64, text_color=color.white, text_size=size.small)
+        table.cell(tf_table, 1, row, str.tostring(tf_net, "#.#"), bgcolor=net_col, text_color=color.white, text_size=size.small)
+        table.cell(tf_table, 2, row, str.tostring(tf_bull, "#"), bgcolor=bull_col, text_color=color.white, text_size=size.small)
+        table.cell(tf_table, 3, row, signal_txt, bgcolor=#455A64, text_color=color.white, text_size=size.small)
+        table.cell(tf_table, 4, row, tf_hh_break ? "✅" : "⬜", bgcolor=tf_hh_break ? #00C853 : #37474F, text_color=color.white, text_size=size.small)
+        table.cell(tf_table, 5, row, tf_ll_break ? "✅" : "⬜", bgcolor=tf_ll_break ? #F44336 : #37474F, text_color=color.white, text_size=size.small)
+
+        row += 1
+
+// ════════════════════════════════════════════════════════════════════
+// TABLE 2 - RIGHT SIDE (ANALYSIS)
+// ════════════════════════════════════════════════════════════════════
+var table main_table = table.new(position.middle_right, 6, 60, border_width=2, frame_color=#1E88E5, frame_width=2)
+
+if barstate.islast
+    table.clear(main_table, 0, 0, 5, 59)
+
+    // Header
+    table.cell(main_table, 0, 0, "🎯 VPMVT MTF ENHANCED",
+               bgcolor=#0D47A1, text_color=color.white, text_size=size.normal)
+    table.merge_cells(main_table, 0, 0, 5, 0)
+
+    row = 1
+
+    // 1. BREAKOUT DETECTION
+    if show_breakout_table
+        table.cell(main_table, 0, row, "📊 BREAKOUT",
+                   bgcolor=#1565C0, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        breakout_color = breakout_type == "HH BREAK ⬆️" ? #00C853 : breakout_type == "LL BREAK ⬇️" ? #F44336 : #757575
+        table.cell(main_table, 0, row, "TF:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, breakout_tf, bgcolor=breakout_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 2, row, breakout_type, bgcolor=breakout_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 2, row, 5, row)
+        row += 1
+
+    // 2. 🆕 MTF CONFLUENCE
+    if show_mtf_confluence
+        table.cell(main_table, 0, row, "🆕 MTF CONFLUENCE",
+                   bgcolor=#7C4DFF, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        conf_color = confluence_type == "BULLISH" ? #00E676 : confluence_type == "BEARISH" ? #FF1744 : #FF9800
+        conf_status = is_confluence ? "ACTIVE ✅" : "NONE ⬜"
+
+        table.cell(main_table, 0, row, conf_status, bgcolor=conf_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, confluence_type, bgcolor=conf_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 2, row, str.tostring(confluence_strength) + "/13", bgcolor=conf_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 2, row, 5, row)
+        row += 1
+
+    // 3. 🆕 MTF TREND ALIGNMENT
+    if show_mtf_alignment
+        table.cell(main_table, 0, row, "🆕 MTF ALIGNMENT",
+                   bgcolor=#7C4DFF, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        align_color = alignment_direction == "BULLISH" ? #00C853 : alignment_direction == "BEARISH" ? #F44336 : #FF9800
+
+        table.cell(main_table, 0, row, str.tostring(alignment_score, "#.#") + "%",
+                   bgcolor=align_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, alignment_direction, bgcolor=align_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 1, row, 5, row)
+        row += 1
+
+        table.cell(main_table, 0, row, alignment_quality, bgcolor=align_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+    // 4. HTF RATIO
+    if show_htf_ratio
+        table.cell(main_table, 0, row, "📈 HTF RATIO",
+                   bgcolor=#1565C0, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        htf_color = htf_bullish_ratio >= 60 ? #00C853 : htf_bullish_ratio <= 40 ? #F44336 : #FF9800
+        table.cell(main_table, 0, row, "Bull:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, str.tostring(htf_bullish_count), bgcolor=#00C853, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 2, row, "Bear:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 3, row, str.tostring(htf_bearish_count), bgcolor=#F44336, text_color=color.white, text_size=size.small)
+        row += 1
+
+        htf_signal = htf_bullish_ratio >= 70 ? "STRONG BULL 🚀" :
+                     htf_bullish_ratio >= 60 ? "BULLISH 📈" :
+                     htf_bullish_ratio <= 30 ? "STRONG BEAR 💥" :
+                     htf_bullish_ratio <= 40 ? "BEARISH 📉" : "NEUTRAL ⚖️"
+
+        table.cell(main_table, 0, row, str.tostring(htf_bullish_ratio, "#.#") + "%",
+                   bgcolor=htf_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, htf_signal, bgcolor=htf_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 1, row, 5, row)
+        row += 1
+
+    // 5. COMPOSITE
+    if show_composite
+        table.cell(main_table, 0, row, "🎯 COMPOSITE",
+                   bgcolor=#1565C0, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        comp_color = composite_score >= 60 ? #00C853 : composite_score <= 40 ? #F44336 : #FF9800
+        comp_signal = composite_score >= 70 ? "VERY STRONG 🔥" :
+                      composite_score >= 60 ? "STRONG 💪" :
+                      composite_score <= 30 ? "VERY WEAK ❄️" :
+                      composite_score <= 40 ? "WEAK 😔" : "BALANCED ⚖️"
+
+        table.cell(main_table, 0, row, str.tostring(composite_score, "#.#") + "%",
+                   bgcolor=comp_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, comp_signal, bgcolor=comp_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 1, row, 5, row)
+        row += 1
+
+    // 6. RECENT MOVEMENT
+    if show_recent_movement
+        mode_text = trading_mode == "Scalper" ? "⚡ SCALPER" : trading_mode == "Day Trader" ? "📊 DAY" : "📈 SWING"
+
+        table.cell(main_table, 0, row, mode_text + " (" + str.tostring(recent_lookback) + ")",
+                   bgcolor=#7C4DFF, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        change_color = recent_change > 0 ? #00C853 : #F44336
+        table.cell(main_table, 0, row, str.tostring(recent_change, "#.#") + "%",
+                   bgcolor=change_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, recent_trend, bgcolor=change_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 1, row, 5, row)
+        row += 1
+
+        table.cell(main_table, 0, row, recent_signal,
+                   bgcolor=recent_signal_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+    // 7. BREAKOUT POTENTIAL
+    if show_breakout_potential
+        score_color = bp_score > 75 ? #FF6B00 : bp_score > 60 ? #FFA726 : bp_score > 40 ? #FFB74D : #757575
+
+        table.cell(main_table, 0, row, "🔥 BREAKOUT POT.",
+                   bgcolor=#FF6B00, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        table.cell(main_table, 0, row, str.tostring(bp_score, "#") + "/100",
+                   bgcolor=score_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, bp_strength, bgcolor=score_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 1, row, 5, row)
+        row += 1
+
+        direction_color = bp_is_bullish ? #00C853 : bp_is_bearish ? #F44336 : #FF9800
+        table.cell(main_table, 0, row, bp_direction,
+                   bgcolor=direction_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, str.tostring(bp_probability, "#.#") + "%",
+                   bgcolor=direction_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 2, row, bp_time, bgcolor=#455A64, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 2, row, 5, row)
+        row += 1
+
+        if bp_is_bullish or bp_is_bearish
+            table.cell(main_table, 0, row, "T1:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+            table.cell(main_table, 1, row, str.tostring(bp_target1, "#.####"),
+                       bgcolor=direction_color, text_color=color.white, text_size=size.small)
+            table.merge_cells(main_table, 1, row, 2, row)
+
+            table.cell(main_table, 3, row, "T2:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+            table.cell(main_table, 4, row, str.tostring(bp_target2, "#.####"),
+                       bgcolor=direction_color, text_color=color.white, text_size=size.small)
+            table.merge_cells(main_table, 4, row, 5, row)
+            row += 1
+
+    // 8. ALL-TIME TOTALS
+    if show_total_amounts
+        table.cell(main_table, 0, row, "💰 ALL-TIME",
+                   bgcolor=#1565C0, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        table.cell(main_table, 0, row, "Pos:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, str.tostring(pos_simplified, "#,##0.0") + "B",
+                   bgcolor=#00C853, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 2, row, "Neg:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 3, row, str.tostring(neg_simplified, "#,##0.0") + "B",
+                   bgcolor=#F44336, text_color=color.white, text_size=size.small)
+        row += 1
+
+        net_color = all_time_net > 0 ? #00C853 : #F44336
+        table.cell(main_table, 0, row, "Net:", bgcolor=#37474F, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, str.tostring(net_simplified, "#,##0.0") + "B",
+                   bgcolor=net_color, text_color=color.white, text_size=size.small)
+
+        trend_color = net_change > 0 ? #00C853 : net_change < 0 ? #F44336 : #FF9800
+        table.cell(main_table, 2, row, net_trend,
+                   bgcolor=trend_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 2, row, 5, row)
+        row += 1
+
+    // 9. MARKET COMMENT
+    if show_market_comment
+        table.cell(main_table, 0, row, "📝 MARKET",
+                   bgcolor=#1565C0, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        condition_color = str.pos(market_condition, "STRONG UPTREND") >= 0 ? #00C853 :
+                         str.pos(market_condition, "STRONG DOWNTREND") >= 0 ? #F44336 :
+                         str.pos(market_condition, "PULLBACK") >= 0 or str.pos(market_condition, "RECOVERY") >= 0 ? #FF9800 : #757575
+        table.cell(main_table, 0, row, market_condition,
+                   bgcolor=condition_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+        suggestion_color = str.pos(trade_suggestion, "LONG position") >= 0 ? #00C853 :
+                          str.pos(trade_suggestion, "SHORT position") >= 0 ? #F44336 :
+                          str.pos(trade_suggestion, "Wait") >= 0 ? #757575 : #FF9800
+        table.cell(main_table, 0, row, trade_suggestion,
+                   bgcolor=suggestion_color, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+    // 10. 🆕 RESET INFO
+    if should_reset
+        table.cell(main_table, 0, row, "🔄 RESET ACTIVE!",
+                   bgcolor=#FF1744, text_color=color.white, text_size=size.small)
+        table.merge_cells(main_table, 0, row, 5, row)
+        row += 1
+
+// ════════════════════════════════════════════════════════════════════
+// ALERTS
+// ════════════════════════════════════════════════════════════════════
+
+// HTF Breakouts
+alertcondition(hh_break_tf11 or hh_break_tf13 or hh_break_tf12,
+               title="HTF HH Break",
+               message="Higher Timeframe HH Break")
+
+alertcondition(ll_break_tf11 or ll_break_tf13 or ll_break_tf12,
+               title="HTF LL Break",
+               message="Higher Timeframe LL Break")
+
+// HTF Ratio
+alertcondition(htf_bullish_ratio >= 75,
+               title="Strong HTF Bullish",
+               message="HTF Ratio: Strong Bullish")
+
+alertcondition(htf_bullish_ratio <= 25,
+               title="Strong HTF Bearish",
+               message="HTF Ratio: Strong Bearish")
+
+// Composite
+alertcondition(composite_score >= 75,
+               title="Composite Very Strong",
+               message="Composite: Very Strong")
+
+alertcondition(composite_score <= 25,
+               title="Composite Very Weak",
+               message="Composite: Very Weak")
+
+// Recent Movement
+alertcondition(recent_change > 3 and recent_vol_ratio > 1.5,
+               title="Strong Long Setup",
+               message="Recent: Strong LONG Setup!")
+
+alertcondition(recent_change < -3 and recent_vol_ratio > 1.5,
+               title="Strong Short Setup",
+               message="Recent: Strong SHORT Setup!")
+
+// Breakout Potential
+alertcondition(bp_score > 80,
+               title="Very High Breakout Potential",
+               message="Breakout Potential: Very High!")
+
+alertcondition(bp_score > 75 and bp_is_bullish,
+               title="Bullish Breakout Building",
+               message="Bullish Breakout Building!")
+
+alertcondition(bp_score > 75 and bp_is_bearish,
+               title="Bearish Breakout Building",
+               message="Bearish Breakout Building!")
+
+// 🆕 MTF Confluence Alerts
+alertcondition(is_confluence and confluence_type == "BULLISH",
+               title="MTF Bullish Confluence",
+               message="MTF Bullish Confluence Detected!")
+
+alertcondition(is_confluence and confluence_type == "BEARISH",
+               title="MTF Bearish Confluence",
+               message="MTF Bearish Confluence Detected!")
+
+// 🆕 MTF Alignment Alerts
+alertcondition(strong_bull_count >= 8,
+               title="Very Strong MTF Bull Alignment",
+               message="Very Strong Bullish MTF Alignment!")
+
+alertcondition(strong_bear_count >= 8,
+               title="Very Strong MTF Bear Alignment",
+               message="Very Strong Bearish MTF Alignment!")
