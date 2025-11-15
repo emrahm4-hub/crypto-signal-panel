@@ -806,16 +806,20 @@ bp_bg_color = show_breakout_potential and bp_score > 80 ? color.new(#FF6B00, 95)
 bgcolor(bp_bg_color, title="High Breakout Potential BG")
 
 // 🆕 MTF Confluence Signals
-plotshape(show_mtf_confluence and is_confluence and confluence_type == "BULLISH",
+// MTF Confluence boolean flags
+is_bullish_confluence = is_confluence and conf_bull_count > conf_bear_count
+is_bearish_confluence = is_confluence and conf_bear_count > conf_bull_count
+
+plotshape(show_mtf_confluence and is_bullish_confluence,
           style=shape.circle, location=location.bottom, color=#00E676, size=size.large,
           title="MTF Bullish Confluence", text="CF🟢")
 
-plotshape(show_mtf_confluence and is_confluence and confluence_type == "BEARISH",
+plotshape(show_mtf_confluence and is_bearish_confluence,
           style=shape.circle, location=location.top, color=#FF1744, size=size.large,
           title="MTF Bearish Confluence", text="CF🔴")
 
-conf_bg_color = show_mtf_confluence and is_confluence and confluence_type == "BULLISH" ? color.new(#00E676, 92) :
-                show_mtf_confluence and is_confluence and confluence_type == "BEARISH" ? color.new(#FF1744, 92) : na
+conf_bg_color = show_mtf_confluence and is_bullish_confluence ? color.new(#00E676, 92) :
+                show_mtf_confluence and is_bearish_confluence ? color.new(#FF1744, 92) : na
 bgcolor(conf_bg_color, title="MTF Confluence BG")
 
 // ════════════════════════════════════════════════════════════════════
@@ -910,11 +914,12 @@ if barstate.islast
         table.merge_cells(main_table, 0, row, 5, row)
         row += 1
 
-        conf_color = confluence_type == "BULLISH" ? #00E676 : confluence_type == "BEARISH" ? #FF1744 : #FF9800
+        conf_color = is_bullish_confluence ? #00E676 : is_bearish_confluence ? #FF1744 : #FF9800
         conf_status = is_confluence ? "ACTIVE ✅" : "NONE ⬜"
+        conf_text = is_bullish_confluence ? "BULLISH" : is_bearish_confluence ? "BEARISH" : "MIXED"
 
         table.cell(main_table, 0, row, conf_status, bgcolor=conf_color, text_color=color.white, text_size=size.small)
-        table.cell(main_table, 1, row, confluence_type, bgcolor=conf_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, conf_text, bgcolor=conf_color, text_color=color.white, text_size=size.small)
         table.cell(main_table, 2, row, str.tostring(confluence_strength) + "/13", bgcolor=conf_color, text_color=color.white, text_size=size.small)
         table.merge_cells(main_table, 2, row, 5, row)
         row += 1
@@ -926,11 +931,14 @@ if barstate.islast
         table.merge_cells(main_table, 0, row, 5, row)
         row += 1
 
-        align_color = alignment_direction == "BULLISH" ? #00C853 : alignment_direction == "BEARISH" ? #F44336 : #FF9800
+        is_align_bullish = strong_bull_count > strong_bear_count
+        is_align_bearish = strong_bear_count > strong_bull_count
+        align_color = is_align_bullish ? #00C853 : is_align_bearish ? #F44336 : #FF9800
+        align_text = is_align_bullish ? "BULLISH" : is_align_bearish ? "BEARISH" : "NEUTRAL"
 
         table.cell(main_table, 0, row, str.tostring(alignment_score, "#.#") + "%",
                    bgcolor=align_color, text_color=color.white, text_size=size.small)
-        table.cell(main_table, 1, row, alignment_direction, bgcolor=align_color, text_color=color.white, text_size=size.small)
+        table.cell(main_table, 1, row, align_text, bgcolor=align_color, text_color=color.white, text_size=size.small)
         table.merge_cells(main_table, 1, row, 5, row)
         row += 1
 
@@ -1149,11 +1157,11 @@ alertcondition(bp_score > 75 and bp_is_bearish,
                message="Bearish Breakout Building!")
 
 // 🆕 MTF Confluence Alerts
-alertcondition(is_confluence and confluence_type == "BULLISH",
+alertcondition(is_bullish_confluence,
                title="MTF Bullish Confluence",
                message="MTF Bullish Confluence Detected!")
 
-alertcondition(is_confluence and confluence_type == "BEARISH",
+alertcondition(is_bearish_confluence,
                title="MTF Bearish Confluence",
                message="MTF Bearish Confluence Detected!")
 
